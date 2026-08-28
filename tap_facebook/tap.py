@@ -76,6 +76,35 @@ class TapFacebook(Tap):
             required=True,
         ),
         th.Property(
+            "page_size",
+            th.IntegerType,
+            description=(
+                "Number of records per Graph API page for campaigns, ad sets, ads, "
+                "and other REST streams. Meta defaults to 25; raising this reduces "
+                "call volume against rate limits."
+            ),
+            default=25,
+        ),
+        th.Property(
+            "backoff_max_tries",
+            th.IntegerType,
+            description=(
+                "Max HTTP retries for retriable errors, including Meta ad-account "
+                "quota (code 17 / 2446079). Raise for overnight runs that should "
+                "sleep through Development-tier windows."
+            ),
+            default=2,
+        ),
+        th.Property(
+            "quota_backoff_seconds",
+            th.IntegerType,
+            description=(
+                "Seconds to sleep after a Meta ad-account quota response before "
+                "retrying. Default 300 (5 minutes)."
+            ),
+            default=300,
+        ),
+        th.Property(
             "insight_reports_list",
             th.ArrayType(
                 th.ObjectType(

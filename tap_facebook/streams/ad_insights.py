@@ -8,17 +8,30 @@ from functools import lru_cache
 
 import facebook_business.adobjects.user as fb_user
 import pendulum
+import requests
 from facebook_business.adobjects.adaccount import AdAccount
 from facebook_business.adobjects.adreportrun import AdReportRun
 from facebook_business.adobjects.adsactionstats import AdsActionStats
 from facebook_business.adobjects.adshistogramstats import AdsHistogramStats
 from facebook_business.adobjects.adsinsights import AdsInsights
 from facebook_business.api import FacebookAdsApi
+from facebook_business.exceptions import FacebookRequestError
 from singer_sdk import typing as th
 from singer_sdk.streams.core import REPLICATION_INCREMENTAL, Stream
 
+from tap_facebook.client import is_quota_error_text
+
 if t.TYPE_CHECKING:
     from singer_sdk.helpers.types import Context
+
+# Transient transport failures from Meta / network (not Graph JSON errors).
+_TRANSIENT_REQUEST_ERRORS: tuple[type[BaseException], ...] = (
+    requests.exceptions.ConnectionError,
+    requests.exceptions.Timeout,
+    requests.exceptions.ChunkedEncodingError,
+    ConnectionResetError,
+    TimeoutError,
+)
 
 EXCLUDED_FIELDS = [
     "total_postbacks",
@@ -161,8 +174,58 @@ class AdsInsightStream(Stream):
             msg = f"Couldn't find account with id {account_id}"
             raise RuntimeError(msg)
 
+    def _quota_backoff_seconds(self) -> int:
+        return int(self.config.get("quota_backoff_seconds", 300))
+
+    def _backoff_max_tries(self) -> int:
+        return int(self.config.get("backoff_max_tries", 2))
+
+    def _is_quota_exception(self, exc: BaseException) -> bool:
+        if isinstance(exc, FacebookRequestError):
+            if exc.api_error_code() == 17 or exc.api_error_subcode() == 2446079:
+                return True
+            return is_quota_error_text(f"{exc.body()} {exc}")
+        return is_quota_error_text(str(exc))
+
+    def _call_with_quota_retry(self, label: str, fn: t.Callable[..., t.Any], *args: t.Any, **kwargs: t.Any) -> t.Any:
+        """Retry Meta Graph calls on quota or transient connection failures."""
+        max_tries = self._backoff_max_tries()
+        quota_wait = self._quota_backoff_seconds()
+        # Connection drops recover faster than ad-account quota windows.
+        conn_wait = min(60, quota_wait)
+        attempt = 0
+        while True:
+            attempt += 1
+            try:
+                return fn(*args, **kwargs)
+            except FacebookRequestError as exc:
+                if not self._is_quota_exception(exc) or attempt >= max_tries:
+                    raise
+                self.logger.warning(
+                    "Meta ad-account quota on %s — sleeping %ss before retry (%s/%s)",
+                    label,
+                    quota_wait,
+                    attempt,
+                    max_tries,
+                )
+                time.sleep(quota_wait)
+            except _TRANSIENT_REQUEST_ERRORS as exc:
+                if attempt >= max_tries:
+                    raise
+                self.logger.warning(
+                    "Transient connection error on %s (%s) — sleeping %ss before retry (%s/%s)",
+                    label,
+                    type(exc).__name__,
+                    conn_wait,
+                    attempt,
+                    max_tries,
+                )
+                time.sleep(conn_wait)
+
     def _run_job_to_completion(self, params: dict) -> None:
-        job = self.account.get_insights(
+        job = self._call_with_quota_retry(
+            "get_insights",
+            self.account.get_insights,
             params=params,
             is_async=True,
         )
@@ -170,7 +233,7 @@ class AdsInsightStream(Stream):
         time_start = time.time()
         while status != "Job Completed":
             duration = time.time() - time_start
-            job = job.api_get()
+            job = self._call_with_quota_retry("insights_job_poll", job.api_get)
             status = job[AdReportRun.Field.async_status]
             percent_complete = job[AdReportRun.Field.async_percent_completion]
 
@@ -303,7 +366,7 @@ class AdsInsightStream(Stream):
                 },
             }
             job = self._run_job_to_completion(params)  # type: ignore[func-returns-value]
-            for obj in job.get_result():
+            for obj in self._call_with_quota_retry("insights_get_result", job.get_result):
                 yield obj.export_all_data()
             # Bump to the next increment
             report_start = report_start.add(days=time_increment)

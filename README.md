@@ -26,6 +26,9 @@ Built with the [Meltano Singer SDK](https://sdk.meltano.com).
 | stream_map_config   | False    | None    | User-defined config values to be used within map expressions. |
 | flattening_enabled  | False    | None    | 'True' to enable schema flattening and automatically expand nested properties. |
 | flattening_max_depth| False    | None    | The max depth to flatten schemas. |
+| page_size           | False    | 25      | Graph API page size for REST streams (campaigns, ad sets, ads). Keep at 25 on Development-tier ad accounts. |
+| backoff_max_tries   | False    | 2       | Max HTTP retries on quota (code 17) and 5xx errors. Raise via `META_BACKOFF_MAX_TRIES` for long backfills. |
+| quota_backoff_seconds | False  | 300     | Seconds to sleep after Meta ad-account quota before retrying. |
 
 A full list of supported settings and capabilities is available by running: `tap-facebook --about`
 

@@ -26,24 +26,23 @@ class AdsStream(IncrementalFacebookStream):
     tap_stream_id = stream id.
     """
 
+    # Field list is baked into `path` below — meltano `select:` exclusions do NOT
+    # reduce Graph API cost for this stream. Prune expensive/unused fields here.
     columns = [  # noqa: RUF012
         "id",
         "account_id",
         "adset_id",
         "campaign_id",
         "bid_type",
-        "bid_info",
+        # omitted (unused / expensive): bid_info, source_ad_id, tracking_specs,
+        # conversion_specs, recommendations
         "status",
         "updated_time",
         "created_time",
         "name",
         "effective_status",
         "last_updated_by_app_id",
-        "source_ad_id",
         "creative",
-        "tracking_specs",
-        "conversion_specs",
-        "recommendations",
         "configured_status",
         "conversion_domain",
         "bid_amount",

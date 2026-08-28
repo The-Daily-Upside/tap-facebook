@@ -19,11 +19,29 @@ if t.TYPE_CHECKING:
     from singer_sdk.helpers.types import Context
 
 
+def is_quota_error_text(content: str) -> bool:
+    """Return True when Meta response body indicates ad-account API quota exhaustion."""
+    content_lower = content.lower()
+    return (
+        "too many calls" in content_lower
+        or "request limit reached" in content_lower
+        or "2446079" in content_lower
+    )
+
+
 class FacebookStream(RESTStream):
     """facebook stream class."""
 
     # add account id in the url
     # path and fields will be added to this url in streams.pys
+
+    def _page_size(self) -> int:
+        """Graph API page size from config (default 25)."""
+        return int(self.config.get("page_size", 25))
+
+    def _quota_backoff_seconds(self) -> int:
+        """Seconds to wait after a Meta quota (code 17) response."""
+        return int(self.config.get("quota_backoff_seconds", 300))
 
     @property
     def url_base(self) -> str:
@@ -85,7 +103,7 @@ class FacebookStream(RESTStream):
         Returns:
             A dictionary of URL query parameters.
         """
-        params: dict = {"limit": 25}
+        params: dict = {"limit": self._page_size()}
         if next_page_token is not None:
             params["after"] = next_page_token
         if self.replication_key:
@@ -115,13 +133,9 @@ class FacebookStream(RESTStream):
                 f"{response.status_code} Client Error: "
                 f"{response.content!s} (Reason: {response.reason}) for path: {full_path}"
             )
-            # Retry on reaching rate limit
-            if (
-                response.status_code == HTTPStatus.BAD_REQUEST
-                and "too many calls" in str(response.content).lower()
-            ) or (
-                response.status_code == HTTPStatus.BAD_REQUEST
-                and "request limit reached" in str(response.content).lower()
+            # Ad-account quota (code 17 / 2446079) is transient: long sleep + retry.
+            if response.status_code == HTTPStatus.BAD_REQUEST and is_quota_error_text(
+                str(response.content),
             ):
                 raise RetriableAPIError(msg, response)
 
@@ -134,15 +148,31 @@ class FacebookStream(RESTStream):
             )
             raise RetriableAPIError(msg, response)
 
+    def backoff_wait_generator(self) -> t.Generator[float, None, None]:
+        """Long fixed wait for quota; exponential for other retriable errors."""
+        return self.backoff_runtime(value=self._backoff_seconds_for_exception)
+
+    def _backoff_seconds_for_exception(self, exception: BaseException) -> int:
+        if is_quota_error_text(str(exception)):
+            wait = self._quota_backoff_seconds()
+            self.logger.warning(
+                "Meta ad-account quota hit — sleeping %ss before retry",
+                wait,
+            )
+            return wait
+        # Mild expo-ish floor for 5xx / other RetriableAPIError
+        return 30
+
     def backoff_max_tries(self) -> int:
         """The number of attempts before giving up when retrying requests.
 
-        Setting to None will retry indefinitely.
+        Configurable via ``backoff_max_tries`` (default 2). Raise for overnight
+        runs that should sleep through Meta Development-tier quota windows.
 
         Returns:
             int: limit
         """
-        return 20
+        return int(self.config.get("backoff_max_tries", 2))
 
 
 class IncrementalFacebookStream(FacebookStream, metaclass=abc.ABCMeta):
@@ -165,7 +195,7 @@ class IncrementalFacebookStream(FacebookStream, metaclass=abc.ABCMeta):
         Returns:
             A dictionary of URL query parameters.
         """
-        params: dict = {"limit": 25}
+        params: dict = {"limit": self._page_size()}
         if next_page_token is not None:
             params["after"] = next_page_token
         if self.replication_key:
