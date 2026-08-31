@@ -4,12 +4,13 @@ import os
 from http import HTTPStatus
 from unittest.mock import MagicMock
 
+import pendulum
 import pytest
 from singer_sdk.exceptions import RetriableAPIError
 from singer_sdk.testing import SuiteConfig, get_tap_test_class
 
 from tap_facebook.streams import AdAccountsStream, AdsStream
-from tap_facebook.streams.ad_insights import EXCLUDED_FIELDS
+from tap_facebook.streams.ad_insights import EXCLUDED_FIELDS, AdsInsightStream
 from tap_facebook.tap import TapFacebook
 
 SAMPLE_CONFIG = {
@@ -26,7 +27,27 @@ OFFLINE_CONFIG = {
     "page_size": 100,
     "backoff_max_tries": 2,
     "quota_backoff_seconds": 300,
+    "max_days_per_sync": 7,
 }
+
+AD_DAILY_REPORT = {
+    "name": "ad_daily",
+    "level": "ad",
+    "breakdowns": [],
+    "action_breakdowns": [],
+    "time_increment_days": 1,
+    "action_attribution_windows_view": "1d_view",
+    "action_attribution_windows_click": "7d_click",
+    "action_report_time": "mixed",
+    "lookback_window": 28,
+}
+
+
+def _insights_stream(bookmark: str) -> AdsInsightStream:
+    tap = TapFacebook(config=OFFLINE_CONFIG)
+    stream = AdsInsightStream(tap=tap, report_definition=AD_DAILY_REPORT)
+    stream.get_starting_replication_key_value = lambda _context: bookmark  # type: ignore[method-assign]
+    return stream
 
 TestTapFacebook = get_tap_test_class(
     TapFacebook,
@@ -91,6 +112,25 @@ def test_quota_backoff_seconds_from_config():
 def test_upstream_excluded_marketing_messages_website_purchase_values():
     # Preserve MeltanoLabs #448 — invalid insights field causes API error #100.
     assert "marketing_messages_website_purchase_values" in EXCLUDED_FIELDS
+
+
+def test_backfill_mode_when_bookmark_far_behind():
+    stream = _insights_stream("2024-01-01")
+    assert stream._is_backfill_mode(None) is True
+    assert stream._max_days_for_run(None) == 7
+
+
+def test_steady_state_when_bookmark_is_recent():
+    recent = pendulum.today().subtract(days=7).to_date_string()
+    stream = _insights_stream(recent)
+    assert stream._is_backfill_mode(None) is False
+    assert stream._max_days_for_run(None) is None
+
+
+def test_backfill_start_date_skips_lookback():
+    stream = _insights_stream("2024-06-01")
+    report_start = stream._get_start_date(None)
+    assert report_start == pendulum.parse("2024-06-01").date()
 
 
 def test_adaccounts_omitted_when_account_id_configured():

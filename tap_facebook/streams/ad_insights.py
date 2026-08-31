@@ -288,6 +288,23 @@ class AdsInsightStream(Stream):
             columns = list(self.schema["properties"])
         return columns
 
+    def _is_backfill_mode(self, context: Context | None) -> bool:
+        """True while the bookmark is still far enough behind today to skip lookback."""
+        bookmark = self.get_starting_replication_key_value(context)
+        if not bookmark:
+            return True
+        incremental_start_date = pendulum.parse(bookmark).date()  # type: ignore[union-attr]
+        today = pendulum.today().date()
+        lookback_window = int(self._report_definition["lookback_window"])
+        days_behind = (today - incremental_start_date).days
+        return days_behind > lookback_window + 1
+
+    def _max_days_for_run(self, context: Context | None) -> int | None:
+        """Cap days per run during backfill; no cap once caught up to recent history."""
+        if not self._is_backfill_mode(context):
+            return None
+        return int(self.config.get("max_days_per_sync", 7))
+
     def _get_start_date(
         self,
         context: Context | None,
@@ -304,6 +321,12 @@ class AdsInsightStream(Stream):
         if config_start_date >= incremental_start_date:
             report_start = config_start_date
             self.logger.info("Using configured start_date as report start filter.")
+        elif self._is_backfill_mode(context):
+            report_start = incremental_start_date
+            self.logger.info(
+                "Backfill in progress — continuing from bookmark '%s' without lookback.",
+                incremental_start_date,
+            )
         else:
             self.logger.info(
                 "Incremental sync, applying lookback '%s' to the "
@@ -347,6 +370,8 @@ class AdsInsightStream(Stream):
         report_end = report_start.add(days=time_increment)
 
         columns = self._get_selected_columns()
+        max_days = self._max_days_for_run(context)
+        days_processed = 0
         while report_start <= sync_end_date:
             params = {
                 "level": self._report_definition["level"],
@@ -368,6 +393,18 @@ class AdsInsightStream(Stream):
             job = self._run_job_to_completion(params)  # type: ignore[func-returns-value]
             for obj in self._call_with_quota_retry("insights_get_result", job.get_result):
                 yield obj.export_all_data()
+            days_processed += time_increment
             # Bump to the next increment
             report_start = report_start.add(days=time_increment)
             report_end = report_end.add(days=time_increment)
+            if max_days is not None and days_processed >= max_days:
+                days_remaining = max(0, (sync_end_date - report_start).days + time_increment)
+                self.logger.info(
+                    "Backfill chunk complete (%s days this run, max_days_per_sync=%s). "
+                    "~%s days remain until %s — will continue on the next scheduled run.",
+                    days_processed,
+                    max_days,
+                    days_remaining,
+                    sync_end_date,
+                )
+                break

@@ -105,6 +105,18 @@ class TapFacebook(Tap):
             default=300,
         ),
         th.Property(
+            "max_days_per_sync",
+            th.IntegerType,
+            description=(
+                "During historical backfill only: max calendar days of insights to "
+                "fetch per tap run (one async report job per day at "
+                "time_increment_days=1). Singer state advances between runs so a "
+                "daily schedule can backfill gradually without exhausting quota. "
+                "Ignored once the bookmark is within lookback_window of today."
+            ),
+            default=7,
+        ),
+        th.Property(
             "insight_reports_list",
             th.ArrayType(
                 th.ObjectType(
