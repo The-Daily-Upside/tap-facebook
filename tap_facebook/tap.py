@@ -49,6 +49,14 @@ DEFAULT_INSIGHT_REPORT = {
     "lookback_window": 28,
 }
 
+# Meltano env substitution passes these as strings; Singer schema expects integers.
+_INT_CONFIG_KEYS = (
+    "page_size",
+    "backoff_max_tries",
+    "quota_backoff_seconds",
+    "max_days_per_sync",
+)
+
 
 class TapFacebook(Tap):
     """Singer tap for extracting data from the Facebook Marketing API."""
@@ -227,6 +235,25 @@ class TapFacebook(Tap):
             description="The latest record date to sync",
         ),
     ).to_dict()
+
+    @classmethod
+    def _coerce_integer_settings(cls, config: dict) -> None:
+        """Cast string env values from Meltano before JSON Schema validation."""
+        for key in _INT_CONFIG_KEYS:
+            value = config.get(key)
+            if value is not None and not isinstance(value, int):
+                config[key] = int(value)
+
+        for report in config.get("insight_reports_list") or []:
+            for report_key in ("time_increment_days", "lookback_window"):
+                value = report.get(report_key)
+                if value is not None and not isinstance(value, int):
+                    report[report_key] = int(value)
+
+    @classmethod
+    def validate_config(cls, config: dict) -> None:
+        cls._coerce_integer_settings(config)
+        super().validate_config(config)
 
     def discover_streams(self) -> list[FacebookStream | AdsInsightStream]:
         """Return a list of discovered streams.
