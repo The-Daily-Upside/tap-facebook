@@ -93,6 +93,24 @@ def test_upstream_excluded_marketing_messages_website_purchase_values():
     assert "marketing_messages_website_purchase_values" in EXCLUDED_FIELDS
 
 
+def test_adaccounts_omitted_when_account_id_configured():
+    tap = TapFacebook(config=OFFLINE_CONFIG)
+    stream_names = {stream.name for stream in tap.discover_streams()}
+    assert "adaccounts" not in stream_names
+
+
+def test_adaccounts_included_without_account_id():
+    tap = TapFacebook(
+        config={
+            "start_date": "2021-03-01T00:00:00Z",
+            "access_token": "test-token",
+            "api_version": "v25.0",
+        },
+    )
+    stream_names = {stream.name for stream in tap.discover_streams()}
+    assert "adaccounts" in stream_names
+
+
 def test_ads_columns_omit_expensive_fields():
     expensive = {
         "recommendations",

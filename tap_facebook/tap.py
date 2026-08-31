@@ -222,7 +222,15 @@ class TapFacebook(Tap):
         Returns:
             A list of discovered streams.
         """
-        streams = [stream_class(tap=self) for stream_class in STREAM_TYPES]
+        stream_types = STREAM_TYPES
+        if self.config.get("account_id"):
+            # /me/adaccounts needs business_management; TDU supplies account_id directly.
+            stream_types = [
+                stream_class
+                for stream_class in STREAM_TYPES
+                if stream_class is not AdAccountsStream
+            ]
+        streams = [stream_class(tap=self) for stream_class in stream_types]
         report_configs = [  # type: ignore[misc]
             DEFAULT_INSIGHT_REPORT,
             *self.config.get("insight_reports_list"),
