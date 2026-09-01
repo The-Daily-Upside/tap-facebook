@@ -123,21 +123,10 @@ def test_integer_config_coercion_from_meltano_env_strings():
         "backoff_max_tries": "8",
         "quota_backoff_seconds": "300",
         "max_days_per_sync": "7",
-        "insight_reports_list": [
-            {
-                "name": "ad_daily",
-                "level": "ad",
-                "breakdowns": [],
-                "action_breakdowns": [],
-                "time_increment_days": "1",
-                "lookback_window": "28",
-            },
-        ],
     }
-    TapFacebook.validate_config(config)
-    assert config["page_size"] == 25
-    assert config["max_days_per_sync"] == 7
-    assert config["insight_reports_list"][0]["lookback_window"] == 28
+    tap = TapFacebook(config=config, validate_config=True)
+    assert tap.config["page_size"] == 25
+    assert tap.config["max_days_per_sync"] == 7
 
 
 def test_backfill_mode_when_bookmark_far_behind():

@@ -236,8 +236,8 @@ class TapFacebook(Tap):
         ),
     ).to_dict()
 
-    @classmethod
-    def _coerce_integer_settings(cls, config: dict) -> None:
+    @staticmethod
+    def _coerce_integer_settings(config: dict) -> None:
         """Cast string env values from Meltano before JSON Schema validation."""
         for key in _INT_CONFIG_KEYS:
             value = config.get(key)
@@ -250,10 +250,9 @@ class TapFacebook(Tap):
                 if value is not None and not isinstance(value, int):
                     report[report_key] = int(value)
 
-    @classmethod
-    def validate_config(cls, config: dict) -> None:
-        cls._coerce_integer_settings(config)
-        super().validate_config(config)
+    def _validate_config(self, *, raise_errors: bool = True) -> list[str]:
+        self._coerce_integer_settings(self._config)
+        return super()._validate_config(raise_errors=raise_errors)
 
     def discover_streams(self) -> list[FacebookStream | AdsInsightStream]:
         """Return a list of discovered streams.
