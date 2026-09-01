@@ -56,6 +56,7 @@ _INT_CONFIG_KEYS = (
     "quota_backoff_seconds",
     "max_days_per_sync",
     "request_delay_seconds",
+    "max_pages_per_sync",
 )
 
 
@@ -120,6 +121,17 @@ class TapFacebook(Tap):
                 "Seconds to sleep after each successful REST page request "
                 "(campaigns, ad sets, ads, creatives, etc.). Use on structure "
                 "syncs to avoid exhausting ad-account quota during insights backfill."
+            ),
+            default=0,
+        ),
+        th.Property(
+            "max_pages_per_sync",
+            th.IntegerType,
+            description=(
+                "Max Graph API pages to fetch per REST stream per tap run "
+                "(campaigns, ad sets, ads, creatives, etc.). Singer state advances "
+                "between runs so a schedule can sync structure gradually without "
+                "exhausting quota. Omit or 0 for no cap."
             ),
             default=0,
         ),

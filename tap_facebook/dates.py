@@ -1,4 +1,4 @@
-"""Date/time helpers using the standard library (no pendulum)."""
+"""Date/time helpers using the standard library."""
 
 from __future__ import annotations
 

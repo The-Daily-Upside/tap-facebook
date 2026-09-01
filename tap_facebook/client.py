@@ -13,7 +13,10 @@ import requests
 from singer_sdk.authenticators import BearerTokenAuthenticator
 from singer_sdk.exceptions import FatalAPIError, RetriableAPIError
 from singer_sdk.helpers.jsonpath import extract_jsonpath
+from singer_sdk.pagination import SinglePagePaginator
 from singer_sdk.streams import RESTStream
+
+from singer_sdk import metrics
 
 from tap_facebook.dates import parse_datetime
 
@@ -50,6 +53,14 @@ class FacebookStream(RESTStream):
     def _request_delay_seconds(self) -> float:
         """Optional pause after each successful REST page (structure throttling)."""
         return float(self.config.get("request_delay_seconds", 0))
+
+    def _max_pages_per_sync(self) -> int | None:
+        """Optional cap on Graph API pages per REST stream per tap run (structure throttling)."""
+        raw = self.config.get("max_pages_per_sync")
+        if raw is None:
+            return None
+        limit = int(raw)
+        return limit if limit > 0 else None
 
     @property
     def url_base(self) -> str:
@@ -197,6 +208,57 @@ class FacebookStream(RESTStream):
             )
             time.sleep(delay)
         return response
+
+    def request_records(self, context: Context | None) -> t.Iterable[dict]:
+        """Paginate REST results, optionally stopping after ``max_pages_per_sync`` pages."""
+        max_pages = self._max_pages_per_sync()
+        if max_pages is None:
+            yield from super().request_records(context)
+            return
+
+        paginator = self.get_new_paginator() or SinglePagePaginator()
+        decorated_request = self.request_decorator(self._request)
+        pages = 0
+
+        with metrics.http_request_counter(self.name, self.path) as request_counter:
+            request_counter.context = context
+
+            while not paginator.finished:
+                prepared_request = self.prepare_request(
+                    context,
+                    next_page_token=paginator.current_value,
+                )
+                resp = decorated_request(prepared_request, context)
+                request_counter.increment()
+                self.update_sync_costs(prepared_request, resp, context)
+                records = iter(self.parse_response(resp))
+                try:
+                    first_record = next(records)
+                except StopIteration:
+                    if paginator.continue_if_empty(resp):
+                        paginator.advance(resp)
+                        continue
+
+                    self.logger.info(
+                        "Pagination stopped after %s pages because no records were "
+                        "found in the last response",
+                        pages,
+                    )
+                    break
+                yield first_record
+                yield from records
+                pages += 1
+                paginator.advance(resp)
+
+                if pages >= max_pages and not paginator.finished:
+                    self.logger.info(
+                        "REST page cap reached (%s pages on '%s', max_pages_per_sync=%s). "
+                        "State will advance; continuing on the next scheduled run.",
+                        pages,
+                        self.name,
+                        max_pages,
+                    )
+                    break
 
 
 class IncrementalFacebookStream(FacebookStream, metaclass=abc.ABCMeta):

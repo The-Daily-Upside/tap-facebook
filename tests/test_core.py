@@ -125,11 +125,23 @@ def test_integer_config_coercion_from_meltano_env_strings():
         "quota_backoff_seconds": "300",
         "max_days_per_sync": "7",
         "request_delay_seconds": "15",
+        "max_pages_per_sync": "5",
     }
     tap = TapFacebook(config=config, validate_config=True)
     assert tap.config["page_size"] == 25
     assert tap.config["max_days_per_sync"] == 7
     assert tap.config["request_delay_seconds"] == 15
+    assert tap.config["max_pages_per_sync"] == 5
+
+
+def test_max_pages_per_sync_from_config():
+    stream = AdsStream(
+        tap=TapFacebook(
+            config={**OFFLINE_CONFIG, "max_pages_per_sync": 5},
+        ),
+    )
+    assert stream._max_pages_per_sync() == 5
+    assert AdsStream(tap=TapFacebook(config=OFFLINE_CONFIG))._max_pages_per_sync() is None
 
 
 def test_parse_date_helpers():
