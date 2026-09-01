@@ -4,10 +4,10 @@ from __future__ import annotations
 
 import time
 import typing as t
+from datetime import date, timedelta
 from functools import lru_cache
 
 import facebook_business.adobjects.user as fb_user
-import pendulum
 import requests
 from facebook_business.adobjects.adaccount import AdAccount
 from facebook_business.adobjects.adreportrun import AdReportRun
@@ -20,6 +20,7 @@ from singer_sdk import typing as th
 from singer_sdk.streams.core import REPLICATION_INCREMENTAL, Stream
 
 from tap_facebook.client import is_quota_error_text
+from tap_facebook.dates import parse_date, subtract_months, utc_today
 
 if t.TYPE_CHECKING:
     from singer_sdk.helpers.types import Context
@@ -293,8 +294,8 @@ class AdsInsightStream(Stream):
         bookmark = self.get_starting_replication_key_value(context)
         if not bookmark:
             return True
-        incremental_start_date = pendulum.parse(bookmark).date()  # type: ignore[union-attr]
-        today = pendulum.today().date()
+        incremental_start_date = parse_date(bookmark)
+        today = utc_today()
         lookback_window = int(self._report_definition["lookback_window"])
         days_behind = (today - incremental_start_date).days
         return days_behind > lookback_window + 1
@@ -308,14 +309,14 @@ class AdsInsightStream(Stream):
     def _get_start_date(
         self,
         context: Context | None,
-    ) -> pendulum.Date:
+    ) -> date:
         lookback_window = self._report_definition["lookback_window"]
 
-        config_start_date = pendulum.parse(self.config["start_date"]).date()  # type: ignore[union-attr]
-        incremental_start_date = pendulum.parse(  # type: ignore[union-attr]
+        config_start_date = parse_date(self.config["start_date"])
+        incremental_start_date = parse_date(
             self.get_starting_replication_key_value(context),  # type: ignore[arg-type]
-        ).date()
-        lookback_start_date = incremental_start_date.subtract(days=lookback_window)
+        )
+        lookback_start_date = incremental_start_date - timedelta(days=lookback_window)
 
         # Don't use lookback if this is the first sync. Just start where the user requested.
         if config_start_date >= incremental_start_date:
@@ -342,8 +343,8 @@ class AdsInsightStream(Stream):
         # older that 37 months from current date would result in 400 Bad request
         # HTTP response.
         # https://developers.facebook.com/docs/marketing-api/reference/ad-account/insights/#overview
-        today = pendulum.today().date()
-        oldest_allowed_start_date = today.subtract(months=37)
+        today = utc_today()
+        oldest_allowed_start_date = subtract_months(today, 37)
         if report_start < oldest_allowed_start_date:
             report_start = oldest_allowed_start_date
             self.logger.info(
@@ -362,12 +363,12 @@ class AdsInsightStream(Stream):
 
         time_increment = self._report_definition["time_increment_days"]
 
-        sync_end_date = pendulum.parse(  # type: ignore[union-attr]
-            self.config.get("end_date", pendulum.today().to_date_string()),
-        ).date()
+        sync_end_date = parse_date(
+            self.config.get("end_date", utc_today().isoformat()),
+        )
 
         report_start = self._get_start_date(context)
-        report_end = report_start.add(days=time_increment)
+        report_end = report_start + timedelta(days=time_increment)
 
         columns = self._get_selected_columns()
         max_days = self._max_days_for_run(context)
@@ -386,8 +387,8 @@ class AdsInsightStream(Stream):
                     self._report_definition["action_attribution_windows_click"],
                 ],
                 "time_range": {
-                    "since": report_start.to_date_string(),
-                    "until": report_end.to_date_string(),
+                    "since": report_start.isoformat(),
+                    "until": report_end.isoformat(),
                 },
             }
             job = self._run_job_to_completion(params)  # type: ignore[func-returns-value]
@@ -395,8 +396,8 @@ class AdsInsightStream(Stream):
                 yield obj.export_all_data()
             days_processed += time_increment
             # Bump to the next increment
-            report_start = report_start.add(days=time_increment)
-            report_end = report_end.add(days=time_increment)
+            report_start = report_start + timedelta(days=time_increment)
+            report_end = report_end + timedelta(days=time_increment)
             if max_days is not None and days_processed >= max_days:
                 days_remaining = max(0, (sync_end_date - report_start).days + time_increment)
                 self.logger.info(

@@ -4,15 +4,18 @@ from __future__ import annotations
 
 import abc
 import json
+import time
 import typing as t
 from http import HTTPStatus
 from urllib.parse import urlparse
 
-import pendulum
+import requests
 from singer_sdk.authenticators import BearerTokenAuthenticator
 from singer_sdk.exceptions import FatalAPIError, RetriableAPIError
 from singer_sdk.helpers.jsonpath import extract_jsonpath
 from singer_sdk.streams import RESTStream
+
+from tap_facebook.dates import parse_datetime
 
 if t.TYPE_CHECKING:
     import requests
@@ -26,6 +29,7 @@ def is_quota_error_text(content: str) -> bool:
         "too many calls" in content_lower
         or "request limit reached" in content_lower
         or "2446079" in content_lower
+        or "reduce the amount of data" in content_lower
     )
 
 
@@ -42,6 +46,10 @@ class FacebookStream(RESTStream):
     def _quota_backoff_seconds(self) -> int:
         """Seconds to wait after a Meta quota (code 17) response."""
         return int(self.config.get("quota_backoff_seconds", 300))
+
+    def _request_delay_seconds(self) -> float:
+        """Optional pause after each successful REST page (structure throttling)."""
+        return float(self.config.get("request_delay_seconds", 0))
 
     @property
     def url_base(self) -> str:
@@ -174,6 +182,22 @@ class FacebookStream(RESTStream):
         """
         return int(self.config.get("backoff_max_tries", 2))
 
+    def _request(
+        self,
+        prepared_request: requests.PreparedRequest,
+        context: Context | None,
+    ) -> requests.Response:
+        """Pause between REST pages when ``request_delay_seconds`` is configured."""
+        response = super()._request(prepared_request, context)
+        delay = self._request_delay_seconds()
+        if delay > 0:
+            self.logger.info(
+                "REST throttle — sleeping %ss before next page",
+                delay,
+            )
+            time.sleep(delay)
+        return response
+
 
 class IncrementalFacebookStream(FacebookStream, metaclass=abc.ABCMeta):
     @property
@@ -201,13 +225,13 @@ class IncrementalFacebookStream(FacebookStream, metaclass=abc.ABCMeta):
         if self.replication_key:
             params["sort"] = "asc"
             params["order_by"] = self.replication_key
-            ts = pendulum.parse(self.get_starting_replication_key_value(context))  # type: ignore[arg-type]
+            ts = parse_datetime(self.get_starting_replication_key_value(context))  # type: ignore[arg-type]
             params["filtering"] = json.dumps(
                 [
                     {
                         "field": f"{self.filter_entity}.{self.replication_key}",
                         "operator": "GREATER_THAN",
-                        "value": int(ts.timestamp()),  # type: ignore[union-attr]
+                        "value": int(ts.timestamp()),
                     },
                 ],
             )

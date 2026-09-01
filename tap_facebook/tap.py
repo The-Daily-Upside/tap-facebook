@@ -55,6 +55,7 @@ _INT_CONFIG_KEYS = (
     "backoff_max_tries",
     "quota_backoff_seconds",
     "max_days_per_sync",
+    "request_delay_seconds",
 )
 
 
@@ -111,6 +112,16 @@ class TapFacebook(Tap):
                 "retrying. Default 300 (5 minutes)."
             ),
             default=300,
+        ),
+        th.Property(
+            "request_delay_seconds",
+            th.IntegerType,
+            description=(
+                "Seconds to sleep after each successful REST page request "
+                "(campaigns, ad sets, ads, creatives, etc.). Use on structure "
+                "syncs to avoid exhausting ad-account quota during insights backfill."
+            ),
+            default=0,
         ),
         th.Property(
             "max_days_per_sync",

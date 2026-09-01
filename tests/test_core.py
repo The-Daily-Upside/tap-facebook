@@ -1,14 +1,15 @@
 """Tests standard tap features using the built-in SDK tests library."""
 
 import os
+from datetime import date, datetime, timedelta, timezone
 from http import HTTPStatus
 from unittest.mock import MagicMock
 
-import pendulum
 import pytest
 from singer_sdk.exceptions import RetriableAPIError
 from singer_sdk.testing import SuiteConfig, get_tap_test_class
 
+from tap_facebook.dates import parse_date, parse_datetime, subtract_months, utc_today
 from tap_facebook.streams import AdAccountsStream, AdsStream
 from tap_facebook.streams.ad_insights import EXCLUDED_FIELDS, AdsInsightStream
 from tap_facebook.tap import TapFacebook
@@ -123,10 +124,20 @@ def test_integer_config_coercion_from_meltano_env_strings():
         "backoff_max_tries": "8",
         "quota_backoff_seconds": "300",
         "max_days_per_sync": "7",
+        "request_delay_seconds": "15",
     }
     tap = TapFacebook(config=config, validate_config=True)
     assert tap.config["page_size"] == 25
     assert tap.config["max_days_per_sync"] == 7
+    assert tap.config["request_delay_seconds"] == 15
+
+
+def test_parse_date_helpers():
+    assert parse_date("2026-01-15") == date(2026, 1, 15)
+    assert parse_date("2026-01-01T00:00:00Z") == date(2026, 1, 1)
+    ts = parse_datetime("2024-06-01T12:00:00Z")
+    assert ts.tzinfo is not None
+    assert subtract_months(date(2026, 9, 1), 37).year == 2023
 
 
 def test_backfill_mode_when_bookmark_far_behind():
@@ -136,7 +147,7 @@ def test_backfill_mode_when_bookmark_far_behind():
 
 
 def test_steady_state_when_bookmark_is_recent():
-    recent = pendulum.today().subtract(days=7).to_date_string()
+    recent = (datetime.now(timezone.utc).date() - timedelta(days=7)).isoformat()
     stream = _insights_stream(recent)
     assert stream._is_backfill_mode(None) is False
     assert stream._max_days_for_run(None) is None
@@ -145,7 +156,7 @@ def test_steady_state_when_bookmark_is_recent():
 def test_backfill_start_date_skips_lookback():
     stream = _insights_stream("2024-06-01")
     report_start = stream._get_start_date(None)
-    assert report_start == pendulum.parse("2024-06-01").date()
+    assert report_start == date.fromisoformat("2024-06-01")
 
 
 def test_adaccounts_omitted_when_account_id_configured():
