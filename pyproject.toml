@@ -27,7 +27,7 @@ tap-facebook = 'tap_facebook.tap:TapFacebook.cli'
 
 [dependency-groups]
 dev = [
-    "pytest>=8.2",
+    "pytest>=9.0.3",
     "singer-sdk[testing]",
 ]
 typing = [
