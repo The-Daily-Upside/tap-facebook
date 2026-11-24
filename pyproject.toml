@@ -17,7 +17,7 @@ readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
     "facebook-business~=21.0.3",
-    "requests~=2.32",
+    "requests~=2.33",
     "singer-sdk~=0.47.0",
 ]
 
